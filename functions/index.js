@@ -19,7 +19,8 @@ exports.createPersonalizedVideo = functions.https.onCall(async (data, context) =
   // Map language to the appropriate Heygen project ID
   const projectIds = {
     english: "d083109364e646a3b44730974cb077e1",
-    russian: "dd55196fb7b14f7596343ef6d2307281",
+    // russian: "dd55196fb7b14f7596343ef6d2307281", commenting out long russian one
+    russian: "945b3d7ed486403c9b1558210ad7964f", // short one
     turkish: "a3f71b47014e440ab863635cc52dd811",
   };
 
@@ -38,29 +39,24 @@ exports.createPersonalizedVideo = functions.https.onCall(async (data, context) =
   ];
 
   try {
-    console.log("Sending request to Heygen API:", {project_id, variables_list});
-
     const response = await axios.post(
         "https://api.heygen.com/v1/personalized_video/add_contact",
         {
-          project_id: project_id,
-          variables_list: variables_list,
+          project_id,
+          variables_list,
         },
         {
           headers: {
             "x-api-key": api_key,
             "content-type": "application/json",
-            "accept": "application/json",
           },
         },
     );
 
-    console.log("Heygen API response:", response.data);
-
     const audienceId = response.data.data.id;
     console.log("Generated audience ID:", audienceId);
 
-    return {audienceId}; // Return the audience ID to the frontend for status checking
+    return {audienceId}; // Return the audience ID to the frontend
   } catch (error) {
     console.error("Error during Heygen API call:", error.response ? error.response.data : error.message);
     throw new functions.https.HttpsError("failed-precondition", "Error creating video.");
@@ -68,7 +64,7 @@ exports.createPersonalizedVideo = functions.https.onCall(async (data, context) =
 });
 
 exports.checkVideoStatus = functions.https.onCall(async (data, context) => {
-  const {audienceId} = data.data;
+  const {audienceId} = data;
 
   console.log("Checking video status for audience ID:", audienceId);
 
@@ -80,17 +76,23 @@ exports.checkVideoStatus = functions.https.onCall(async (data, context) => {
   try {
     const videoResponse = await axios.get(
         `https://api.heygen.com/v1/personalized_video/audience/detail?id=${audienceId}`,
-        {headers: {"x-api-key": api_key, "accept": "application/json"}},
+        {
+          headers: {
+            "x-api-key": api_key,
+            "accept": "application/json",
+          },
+        },
     );
 
     const videoStatus = videoResponse.data.data.status;
     const videoUrl = videoResponse.data.data.video_url;
+    const genericVideoUrl = "https://your-generic-video-url.com/generic.mp4"; // Replace with your actual generic video URL
 
     console.log("Video status:", videoStatus);
 
     if (videoStatus === "ready") {
       console.log("Video is ready, URL:", videoUrl);
-      return {status: "ready", video_url: videoUrl};
+      return {status: "ready", videoUrl, genericVideoUrl};
     } else {
       return {status: videoStatus};
     }
@@ -99,6 +101,7 @@ exports.checkVideoStatus = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError("failed-precondition", "Error checking video status.");
   }
 });
+
 
 function formatHumanReadableDatetime(datetime) {
   const date = new Date(datetime);

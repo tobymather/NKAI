@@ -10,6 +10,13 @@
 
   <!-- Include your Firebase config file -->
   <script src="firebaseConfig.js"></script>
+  
+  <style>
+    #videoPlayer {
+      max-width: 50%
+    }
+  </style>
+
 </head>
 <body>
   <h1>Create Personalized Video</h1>
@@ -20,15 +27,6 @@
     <label for="email">Email:</label>
     <input type="text" id="email" name="email" required><br>
     
-    <label for="age">Age:</label>
-    <input type="number" id="age" name="age" required><br>
-    
-    <label for="teacher">Select Teacher:</label>
-    <select id="teacher" name="teacher" required>
-      <option value="Teacher A">Toby</option>
-      <option value="Teacher B">Teacher B</option>
-    </select><br>
-
     <label for="datetime">Select Time & Date:</label>
     <input type="datetime-local" id="datetime" name="datetime" required><br>
 
@@ -44,74 +42,76 @@
 
   <div id="videoSection" style="display: none;">
     <h2>Your Personalized Video</h2>
-    <video id="personalizedVideo" controls></video>
+    <video id="videoPlayer" controls></video>
   </div>
 
   <script>
 
-    document.getElementById("personalizedForm").addEventListener("submit", async function(event) {
-      event.preventDefault();
+document.getElementById("personalizedForm").addEventListener("submit", async function(event) {
+    event.preventDefault();
 
-      // Collect form data
-      const first_name = document.getElementById("first_name").value;
-      const email = document.getElementById("email").value;
-      const datetime = document.getElementById("datetime").value;
-      const language = document.getElementById("language").value;
+    // Collect form data
+    const first_name = document.getElementById("first_name").value;
+    const email = document.getElementById("email").value;
+    const datetime = document.getElementById("datetime").value;
+    const language = document.getElementById("language").value;
 
-      // Log form data for debugging
-      console.log("Form data:", {
-        first_name: first_name,
-        email: email,
-        datetime: datetime,
-        language: language
-      });
+    console.log("Form data:", { first_name, email, datetime, language });
 
-      // Check if any data is missing
-      if (!first_name || !email || !datetime || !language) {
-        console.error("Form data is missing:", { first_name, email, datetime, language });
-        alert("Please fill in all required fields.");
-        return;
-      }
-
-      // Call Firebase function to make API request
+    try {
+      // Call the backend function to create the personalized video
       const makeVideo = functions.httpsCallable('createPersonalizedVideo');
-      
-      try {
-        const response = await makeVideo({ first_name, email, datetime, language });
-        console.log("Response received:", response);
+      const response = await makeVideo({ first_name, email, datetime, language });
+      console.log("Response received:", response);
 
-        const audienceId = response.data.audienceId;
-        console.log("Audience ID:", audienceId);
+      const audienceId = response.data.audienceId;
+      console.log("Audience ID:", audienceId);
 
-        // Polling for video status
-        let videoReady = false;
-
-        while (!videoReady) {
-          const statusResponse = await checkVideoStatus(audienceId);
-          console.log("Status Response:", statusResponse);
-
-          if (statusResponse.status === "ready") {
-            console.log("Video is now ready!");
-            videoReady = true;
-            document.getElementById("videoSection").style.display = "block";
-            document.getElementById("personalizedVideo").src = statusResponse.video_url;
-          } else {
-            console.log("Still waiting for video, checking again in 5 seconds...");
-            await new Promise(resolve => setTimeout(resolve, 5000));  // Wait for 5 seconds
-          }
-        }
-      } catch (error) {
-        console.error("Error while creating personalized video:", error);
-        alert("An error occurred while creating the video. Please try again later.");
+      if (!audienceId) {
+        throw new Error("No audience ID returned from createPersonalizedVideo.");
       }
-    });
 
-    // Helper function to call checkVideoStatus
-    async function checkVideoStatus(audienceId) {
-      const statusFunction = functions.httpsCallable('checkVideoStatus');
-      const response = await statusFunction({ audienceId });
-      return response.data;
+      // Polling for video status
+      let videoReady = false;
+      let videoUrl = '';
+      let genericVideoUrl = '';
+
+      while (!videoReady) {
+        console.log("Checking video status...");
+        const checkStatus = functions.httpsCallable('checkVideoStatus');
+        const statusResponse = await checkStatus({ audienceId });
+        console.log("Status Response:", statusResponse.data);
+
+        if (statusResponse.data.status === 'ready') {
+          videoReady = true;
+          videoUrl = statusResponse.data.video_url;
+          genericVideoUrl = statusResponse.data.generic_video_url;
+          console.log("Video is now ready!");
+        } else {
+          console.log("Still processing, will check again in 5 seconds...");
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before checking again
+        }
+      }
+
+      // Display the video section
+      document.getElementById("videoSection").style.display = "block";
+
+      // Play the personalized video first
+      const videoPlayer = document.getElementById("videoPlayer");
+      videoPlayer.src = videoUrl;
+      videoPlayer.play();
+
+      // After the first video ends, switch to the generic video
+      videoPlayer.onended = () => {
+        console.log("Personalized video ended. Switching to generic video.");
+        videoPlayer.src = genericVideoUrl;
+        videoPlayer.play();
+      };
+    } catch (error) {
+      console.error("Error while creating personalized video:", error);
+      alert("An error occurred while creating the video. Please try again later.");
     }
+  });
   </script>
 </body>
 </html>
