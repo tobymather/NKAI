@@ -64,7 +64,7 @@ exports.createPersonalizedVideo = functions.https.onCall(async (data, context) =
 });
 
 exports.checkVideoStatus = functions.https.onCall(async (data, context) => {
-  const {audienceId} = data;
+  const audienceId = data.data.audienceId;
 
   console.log("Checking video status for audience ID:", audienceId);
 
@@ -92,7 +92,7 @@ exports.checkVideoStatus = functions.https.onCall(async (data, context) => {
 
     if (videoStatus === "ready") {
       console.log("Video is ready, URL:", videoUrl);
-      return {status: "ready", videoUrl, genericVideoUrl};
+      return {status: "ready", video_url: videoUrl, generic_video_url: genericVideoUrl};
     } else {
       return {status: videoStatus};
     }
