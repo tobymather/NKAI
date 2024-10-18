@@ -3,17 +3,37 @@
 <head>
   <meta charset="UTF-8">
   <title>Personalized Video Demo</title>
-  
+
   <!-- Firebase JS SDKs -->
   <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-functions-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
 
   <!-- Include your Firebase config file -->
   <script src="firebaseConfig.js"></script>
+
+  <script>
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+  
+    // Initialize Firebase Auth
+    firebase.auth().signInAnonymously()
+      .catch(function(error) {
+        console.error("Error signing in anonymously:", error);
+      });
+    </script>
+  
+  <script>
+    // Initialize Firebase Auth
+    firebase.auth().signInAnonymously()
+      .catch(function(error) {
+        console.error("Error signing in anonymously:", error);
+      });
+  </script>
   
   <style>
     #videoPlayer {
-      max-width: 50%
+      max-width: 50%;
     }
   </style>
 
@@ -23,12 +43,9 @@
   <form id="personalizedForm">
     <label for="first_name">Child's Name:</label>
     <input type="text" id="first_name" name="first_name" required><br>
-    
+
     <label for="email">Email:</label>
     <input type="text" id="email" name="email" required><br>
-    
-    <label for="datetime">Select Time & Date:</label>
-    <input type="datetime-local" id="datetime" name="datetime" required><br>
 
     <label for="language">Select Language:</label>
     <select id="language" name="language" required>
@@ -46,72 +63,72 @@
   </div>
 
   <script>
+      const functions = firebase.functions();
 
-document.getElementById("personalizedForm").addEventListener("submit", async function(event) {
-    event.preventDefault();
+    document.getElementById("personalizedForm").addEventListener("submit", async function(event) {
+      event.preventDefault();
 
-    // Collect form data
-    const first_name = document.getElementById("first_name").value;
-    const email = document.getElementById("email").value;
-    const datetime = document.getElementById("datetime").value;
-    const language = document.getElementById("language").value;
+      // Collect form data
+      const first_name = document.getElementById("first_name").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const language = document.getElementById("language").value.trim();
 
-    console.log("Form data:", { first_name, email, datetime, language });
+      console.log("Form data:", { first_name, email, language });
 
-    try {
-      // Call the backend function to create the personalized video
-      const makeVideo = functions.httpsCallable('createPersonalizedVideo');
-      const response = await makeVideo({ first_name, email, datetime, language });
-      console.log("Response received:", response);
+      try {
+        // Call the backend function to create the personalized video
+        const makeVideo = functions.httpsCallable('createPersonalizedVideo');
+        const response = await makeVideo({ first_name, email, language });
+        console.log("Response received:", response);
 
-      const audienceId = response.data.audienceId;
-      console.log("Audience ID:", audienceId);
+        const audienceId = response.data.audienceId;
+        console.log("Audience ID:", audienceId);
 
-      if (!audienceId) {
-        throw new Error("No audience ID returned from createPersonalizedVideo.");
-      }
-
-      // Polling for video status
-      let videoReady = false;
-      let videoUrl = '';
-      let genericVideoUrl = '';
-
-      while (!videoReady) {
-        console.log("Checking video status...");
-        const checkStatus = functions.httpsCallable('checkVideoStatus');
-        const statusResponse = await checkStatus({ audienceId });
-        console.log("Status Response:", statusResponse.data);
-
-        if (statusResponse.data.status === 'ready') {
-          videoReady = true;
-          videoUrl = statusResponse.data.video_url;
-          genericVideoUrl = statusResponse.data.generic_video_url;
-          console.log("Video is now ready!");
-        } else {
-          console.log("Still processing, will check again in 5 seconds...");
-          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before checking again
+        if (!audienceId) {
+          throw new Error("No audience ID returned from createPersonalizedVideo.");
         }
-      }
 
-      // Display the video section
-      document.getElementById("videoSection").style.display = "block";
+        // Polling for video status
+        let videoReady = false;
+        let videoUrl = '';
+        let genericVideoUrl = '';
 
-      // Play the personalized video first
-      const videoPlayer = document.getElementById("videoPlayer");
-      videoPlayer.src = videoUrl;
-      videoPlayer.play();
+        while (!videoReady) {
+          console.log("Checking video status...");
+          const checkStatus = functions.httpsCallable('checkVideoStatus');
+          const statusResponse = await checkStatus({ audienceId, email, language });
+          console.log("Status Response:", statusResponse.data);
 
-      // After the first video ends, switch to the generic video
-      videoPlayer.onended = () => {
-        console.log("Personalized video ended. Switching to generic video.");
-        videoPlayer.src = genericVideoUrl;
+          if (statusResponse.data.status === 'ready') {
+            videoReady = true;
+            videoUrl = statusResponse.data.video_url;
+            genericVideoUrl = statusResponse.data.generic_video_url;
+            console.log("Video is now ready!");
+          } else {
+            console.log("Still processing, will check again in 5 seconds...");
+            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before checking again
+          }
+        }
+
+        // Display the video section
+        document.getElementById("videoSection").style.display = "block";
+
+        // Play the personalized video first
+        const videoPlayer = document.getElementById("videoPlayer");
+        videoPlayer.src = videoUrl;
         videoPlayer.play();
-      };
-    } catch (error) {
-      console.error("Error while creating personalized video:", error);
-      alert("An error occurred while creating the video. Please try again later.");
-    }
-  });
+
+        // After the first video ends, switch to the generic video
+        videoPlayer.onended = () => {
+          console.log("Personalized video ended. Switching to generic video.");
+          videoPlayer.src = genericVideoUrl;
+          videoPlayer.play();
+        };
+      } catch (error) {
+        console.error("Error while creating personalized video:", error);
+        alert("An error occurred while creating the video. Please try again later.");
+      }
+    });
   </script>
 </body>
 </html>
