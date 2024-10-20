@@ -8,9 +8,6 @@ const admin = require("firebase-admin");
 // Initialize Firebase Admin
 admin.initializeApp();
 
-// Initialize Firebase Storage
-const bucket = admin.storage().bucket();
-
 // Securely access your API key
 const api_key = "YzYxZWQwZDI2MmEzNDEyYTgxOWQxN2RmMzhkMjhhNzgtMTcyNzk1MzgzOQ==";
 
@@ -50,114 +47,243 @@ async function createPersonalizedVideoHelper(first_name, email, language) {
   }
 }
 
-// Cloud Function callable from frontend
-exports.createPersonalizedVideo = functions.https.onCall(async (data, context) => {
-  const {first_name, email, language} = data.data;
+// Function to poll for video status and store Heygen video URL directly
+async function pollForVideoStatus(videoToken, audienceId) {
+  let polling = true;
+  while (polling) {
+    try {
+      console.log(`Polling video status for audience ID: ${audienceId}`);
 
-  console.log("Received data from frontend:", {first_name, email, language});
+      // Poll the Heygen API for the status of the video
+      const videoResponse = await axios.get(
+          `https://api.heygen.com/v1/personalized_video/audience/detail?id=${audienceId}`,
+          {headers: {"x-api-key": api_key, "accept": "application/json"}},
+      );
+
+      const videoStatus = videoResponse.data.data.status;
+      const heygenVideoUrl = videoResponse.data.data.video_url;
+
+      console.log(`Heygen API returned status: ${videoStatus} for audience ID: ${audienceId}`);
+
+      // If video is ready, save the Heygen video URL to Firestore and stop polling
+      if (videoStatus === "ready") {
+        console.log(`Heygen video is ready. Using video URL: ${heygenVideoUrl}`);
+        polling = false;
+
+        // Update Firestore with the Heygen video URL
+        const docRef = admin.firestore().collection("videos").doc(videoToken);
+        await docRef.update({videoUrl: heygenVideoUrl});
+
+        console.log(`Firestore document updated with Heygen video URL for token ${videoToken}`);
+      } else {
+        console.log(`Video is still processing. Status: ${videoStatus}`);
+        await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds before next poll
+      }
+    } catch (error) {
+      console.error("Error while polling for video status:", error.message);
+      polling = false; // Stop polling if there's a major issue
+    }
+  }
+}
+
+// HTTP function for creating personalized video
+exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
+  if (req.method !== "POST") {
+    return res.status(405).send("Method Not Allowed");
+  }
+
+  const {first_name, email, language} = req.body;
 
   if (!first_name || !email || !language) {
-    console.error("Missing required data:", {first_name, email, language});
-    throw new functions.https.HttpsError("invalid-argument", "Missing required data.");
+    return res.status(400).json({error: "Missing required data."});
   }
 
   try {
-    const result = await createPersonalizedVideoHelper(first_name, email, language);
-    return result;
+    createPersonalizedVideoHelper(first_name, email, language).then(({audienceId}) => {
+      const videoToken = admin.firestore().collection("videos").doc().id;
+
+      admin.firestore().collection("videos").doc(videoToken).set({
+        audience_id: audienceId,
+        email: email,
+        first_name: first_name,
+        language: language,
+        videoUrl: null,
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Start polling for video status (server-side polling)
+      pollForVideoStatus(videoToken, audienceId);
+
+      // Generate the personalized video page URL and return it immediately to the client
+      const videoPageUrl = `https://nkai-ea87e.web.app/video/${videoToken}`;
+
+      return res.status(200).json({
+        status: "pending",
+        video_page_url: videoPageUrl,
+        audienceId: audienceId,
+      });
+    }).catch((error) => {
+      console.error("Error creating personalized video:", error);
+      return res.status(500).json({error: "Error creating personalized video."});
+    });
   } catch (error) {
     console.error("Error creating personalized video:", error);
-    throw new functions.https.HttpsError("internal", error.message);
+    return res.status(500).json({error: "Error creating personalized video."});
   }
 });
 
-// Function to check video status
-exports.checkVideoStatus = functions.https.onCall(async (data, context) => {
-  const {audienceId, email, language} = data.data;
+// Function to serve the personalized video page
+exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
+  const videoToken = req.path.split("/").pop();
 
-  console.log("Checking video status for audience ID:", audienceId);
-
-  if (!audienceId || !email || !language) {
-    console.error("Missing required data.");
-    throw new functions.https.HttpsError("invalid-argument", "Audience ID, email, and language are required.");
+  if (!videoToken) {
+    return res.status(400).send("Invalid video URL.");
   }
 
   try {
-    const videoResponse = await axios.get(
-        `https://api.heygen.com/v1/personalized_video/audience/detail?id=${audienceId}`,
-        {
-          headers: {
-            "x-api-key": api_key,
-            "accept": "application/json",
-          },
-        },
-    );
+    const doc = await admin.firestore().collection("videos").doc(videoToken).get();
 
-    const videoStatus = videoResponse.data.data.status;
-    const videoUrl = videoResponse.data.data.video_url;
-
-    console.log("Video status:", videoStatus);
-
-    if (videoStatus === "ready") {
-      console.log("Video is ready, URL:", videoUrl);
-
-      // Download the video from Heygen
-      const response = await axios.get(videoUrl, {responseType: "stream"});
-
-      // Generate a unique filename
-      const fileName = `videos/${audienceId}.mp4`;
-      const file = bucket.file(fileName);
-
-      // Upload the video to Firebase Storage
-      await new Promise((resolve, reject) => {
-        const writeStream = file.createWriteStream({
-          metadata: {
-            contentType: "video/mp4",
-          },
-        });
-
-        response.data.pipe(writeStream);
-
-        writeStream.on("finish", resolve);
-        writeStream.on("error", reject);
-      });
-
-      // Get the download URL
-      const [videoDownloadUrl] = await file.getSignedUrl({
-        action: "read",
-        expires: "03-17-2025",
-      });
-
-      console.log("Video uploaded and available at:", videoDownloadUrl);
-
-      // Determine generic video URL based on language
-      const genericVideoUrls = {
-        english: "https://yourdomain.com/videos/generic_english.mp4",
-        russian: "https://yourdomain.com/videos/generic_russian.mp4",
-        turkish: "https://yourdomain.com/videos/generic_turkish.mp4",
-      };
-
-      const genericVideoUrl = genericVideoUrls[language.toLowerCase()] || "https://yourdomain.com/videos/generic_default.mp4";
-
-      // Log the event data that would be sent to Bloomreach
-      const eventData = {
-        email: email,
-        video_url: videoDownloadUrl,
-        timestamp: new Date().toISOString(),
-      };
-
-      console.log("Event data that would be sent to Bloomreach:", eventData);
-
-      return {status: "ready", video_url: videoDownloadUrl, generic_video_url: genericVideoUrl};
-    } else {
-      return {status: videoStatus};
+    if (!doc.exists) {
+      return res.status(404).send("Video not found.");
     }
+
+    const videoUrl = doc.data().videoUrl;
+
+    const htmlContent = `
+      <html>
+      <head>
+        <style>
+          body {
+            background-color: #4221B8;
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+          }
+          .header {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 95%;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            position: absolute;
+            top: 20px;
+          }
+          .header__logo {
+            max-width: 90%;
+            margin:5px;
+          }
+          .header__home-icon {
+            max-width: 40px;
+            cursor: pointer;
+          }
+          .container {
+            text-align: center;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            width: 90%;
+          }
+          h1 {
+            font-size: 24px;
+            color: #333;
+          }
+          .video-player {
+            margin: 20px 0;
+            border-radius: 10px;
+            overflow: hidden;
+          }
+          .loading-spinner {
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 2s linear infinite;
+            display: ${videoUrl ? "none" : "inline-block"};
+          }
+          .loading-text {
+            font-size: 16px;
+            color: #777;
+            display: ${videoUrl ? "none" : "block"};
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          .footer {
+            font-size: 12px;
+            color: #999;
+            margin-top: 20px;
+          }
+        </style>
+      </head>
+      <body>
+        <!-- Header -->
+        <div class="header">
+          <img src="https://cdn.novakidschool.com/landing/static/images/logo_dark-blue.svg" alt="Novakid Logo" class="header__logo"/>
+          <a href="https://school.novakidschool.com/signin">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-house header__home-icon" viewBox="0 0 16 16">
+              <path d="M8.707 1.5a1 1 0 0 0-1.414 0L.646 8.146a.5.5 0 0 0 .708.708L2 8.207V13.5A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V8.207l.646.647a.5.5 0 0 0 .708-.708L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293zM13 7.207V13.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5V7.207l5-5z"/>
+            </svg>
+          </a>
+        </div>
+
+        <!-- Content -->
+        <div class="container">          
+          <!-- Video Player -->
+          <div class="video-player">
+            <video id="videoPlayer" controls style="width: 100%;">
+              <source src="${videoUrl}" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+          </div>
+
+          <!-- Loading spinner and text while video is processing -->
+          <div class="loading-spinner"></div>
+          <p class="loading-text">Your video is being processed. Please check back shortly...</p>
+
+          <div class="footer">
+            <p>&copy; 2024 Novakid. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      <script>
+        const videoToken = '${videoToken}';
+        if (!'${videoUrl}') {
+          const interval = setInterval(async () => {
+            try {
+              const response = await fetch(\`/checkVideoStatus?videoToken=\${videoToken}\`);
+              const result = await response.json();
+
+              if (result.status === 'ready') {
+                document.getElementById('videoPlayer').src = result.video_url;
+                document.querySelector('.loading-spinner').style.display = 'none';
+                document.querySelector('.loading-text').style.display = 'none';
+                clearInterval(interval);
+              }
+            } catch (error) {
+              console.error('Error checking video status:', error);
+            }
+          }, 5000);
+        }
+      </script>
+      </html>
+    `;
+
+    res.status(200).send(htmlContent);
   } catch (error) {
-    console.error("Error while checking video status:", error.response ? error.response.data : error.message);
-    throw new functions.https.HttpsError("internal", "Error checking video status.");
+    console.error("Error serving personalized video:", error);
+    res.status(500).send("Internal Server Error.");
   }
 });
-
-// HTTP function to receive webhook (keep as onRequest if necessary)
 exports.receiveSignupWebhook = functions.https.onRequest(async (req, res) => {
   // Handle CORS if necessary
   res.set("Access-Control-Allow-Origin", "*");
@@ -173,23 +299,23 @@ exports.receiveSignupWebhook = functions.https.onRequest(async (req, res) => {
     return res.status(405).send("Method Not Allowed");
   }
 
-  const {child_name, language, parent_email} = req.body;
+  const {child_name, language, email} = req.body;
 
-  console.log("Received data from webhook:", {child_name, language, parent_email});
+  console.log("Received data from webhook:", {child_name, language, email});
 
-  if (!child_name || !language || !parent_email) {
+  if (!child_name || !language || !email) {
     return res.status(400).send("Missing required fields.");
   }
 
   try {
-    const result = await createPersonalizedVideoHelper(child_name, parent_email, language);
+    const result = await createPersonalizedVideoHelper(child_name, email, language);
     const {audienceId} = result;
 
     if (!audienceId) {
       throw new Error("Failed to create video.");
     }
 
-    // Optionally, you can immediately start checking the video status or send a response back
+    // Optionally send a response back to the third-party system with the video URL or status
     res.status(200).send({message: "Video creation initiated.", audienceId});
   } catch (error) {
     console.error("Error processing webhook:", error);
