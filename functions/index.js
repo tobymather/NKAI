@@ -132,7 +132,6 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
   }
 });
 
-// Function to serve the personalized video page
 exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
   const videoToken = req.path.split("/").pop();
 
@@ -148,6 +147,7 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
     }
 
     const videoUrl = doc.data().videoUrl;
+    const language = doc.data().language || "english";
 
     const htmlContent = `
       <html>
@@ -242,7 +242,7 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
           <!-- Video Player -->
           <div class="video-player">
             <video id="videoPlayer" controls style="width: 100%;">
-              <source id="videoSource" src="${videoUrl}" type="video/mp4">
+              <source id="videoSource" src="${videoUrl || ""}" type="video/mp4">
               Your browser does not support the video tag.
             </video>
           </div>
@@ -261,21 +261,22 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
         const videoPlayer = document.getElementById('videoPlayer');
         const videoSource = document.getElementById('videoSource');
         const videoToken = '${videoToken}';
-        const language = '${doc.data().language}'; // Fetch language from Firestore document
+        const language = '${language}';
         const genericVideos = {
           english: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
           russian: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
           turkish: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
         };
 
-        if (!'${videoUrl}') {
+        if (!videoSource.src || videoSource.src === "") {
           const interval = setInterval(async () => {
             try {
               const response = await fetch(\`/checkVideoStatus?videoToken=\${videoToken}\`);
               const result = await response.json();
 
-              if (result.status === 'ready') {
-                document.getElementById('videoPlayer').src = result.video_url;
+              if (result.status === 'ready' && result.video_url) {
+                videoSource.src = result.video_url;
+                videoPlayer.load();
                 document.querySelector('.loading-spinner').style.display = 'none';
                 document.querySelector('.loading-text').style.display = 'none';
                 clearInterval(interval);
@@ -290,8 +291,8 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
         videoPlayer.addEventListener('ended', function() {
           const genericVideoUrl = genericVideos[language.toLowerCase()] || genericVideos['english'];
           videoSource.src = genericVideoUrl;
-          videoPlayer.load(); // Reload the video player with the new source
-          videoPlayer.play(); // Automatically play the generic video
+          videoPlayer.load();
+          videoPlayer.play();
         });
       </script>
       </html>
