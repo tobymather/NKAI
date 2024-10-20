@@ -190,6 +190,7 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
             border-radius: 10px;
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
             width: 90%;
+            max-width:800px;
           }
           h1 {
             font-size: 24px;
@@ -241,7 +242,7 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
           <!-- Video Player -->
           <div class="video-player">
             <video id="videoPlayer" controls style="width: 100%;">
-              <source src="${videoUrl}" type="video/mp4">
+              <source id="videoSource" src="${videoUrl}" type="video/mp4">
               Your browser does not support the video tag.
             </video>
           </div>
@@ -255,8 +256,18 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
           </div>
         </div>
       </body>
+      
       <script>
+        const videoPlayer = document.getElementById('videoPlayer');
+        const videoSource = document.getElementById('videoSource');
         const videoToken = '${videoToken}';
+        const language = '${doc.data().language}'; // Fetch language from Firestore document
+        const genericVideos = {
+          english: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+          russian: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+          turkish: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+        };
+
         if (!'${videoUrl}') {
           const interval = setInterval(async () => {
             try {
@@ -274,6 +285,14 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
             }
           }, 5000);
         }
+
+        // Play the generic video when the personalized video ends
+        videoPlayer.addEventListener('ended', function() {
+          const genericVideoUrl = genericVideos[language.toLowerCase()] || genericVideos['english'];
+          videoSource.src = genericVideoUrl;
+          videoPlayer.load(); // Reload the video player with the new source
+          videoPlayer.play(); // Automatically play the generic video
+        });
       </script>
       </html>
     `;
