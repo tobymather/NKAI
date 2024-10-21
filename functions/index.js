@@ -4,6 +4,7 @@
 const functions = require("firebase-functions");
 const axios = require("axios");
 const admin = require("firebase-admin");
+const cors = require("cors")({origin: true}); // Add CORS middleware
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -15,7 +16,6 @@ const api_key = "YzYxZWQwZDI2MmEzNDEyYTgxOWQxN2RmMzhkMjhhNzgtMTcyNzk1MzgzOQ==";
 async function createPersonalizedVideoHelper(first_name, email, language) {
   console.log("Creating personalized video for:", {first_name, email, language});
 
-  // Map language to the appropriate Heygen project ID
   const projectIds = {
     english: "d083109364e646a3b44730974cb077e1",
     russian: "945b3d7ed486403c9b1558210ad7964f",
@@ -54,7 +54,6 @@ async function pollForVideoStatus(videoToken, audienceId) {
     try {
       console.log(`Polling video status for audience ID: ${audienceId}`);
 
-      // Poll the Heygen API for the status of the video
       const videoResponse = await axios.get(
           `https://api.heygen.com/v1/personalized_video/audience/detail?id=${audienceId}`,
           {headers: {"x-api-key": api_key, "accept": "application/json"}},
@@ -65,12 +64,10 @@ async function pollForVideoStatus(videoToken, audienceId) {
 
       console.log(`Heygen API returned status: ${videoStatus} for audience ID: ${audienceId}`);
 
-      // If video is ready, save the Heygen video URL to Firestore and stop polling
       if (videoStatus === "ready") {
         console.log(`Heygen video is ready. Using video URL: ${heygenVideoUrl}`);
         polling = false;
 
-        // Update Firestore with the Heygen video URL
         const docRef = admin.firestore().collection("videos").doc(videoToken);
         await docRef.update({videoUrl: heygenVideoUrl});
 
@@ -81,75 +78,72 @@ async function pollForVideoStatus(videoToken, audienceId) {
       }
     } catch (error) {
       console.error("Error while polling for video status:", error.message);
-      polling = false; // Stop polling if there's a major issue
+      polling = false;
     }
   }
 }
 
 // HTTP function for creating personalized video
 exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
-  if (req.method !== "POST") {
-    return res.status(405).send("Method Not Allowed");
-  }
+  cors(req, res, async () => {
+    if (req.method !== "POST") {
+      return res.status(405).json({error: "Method Not Allowed"});
+    }
 
-  const {first_name, email, language} = req.body;
+    const {first_name, email, language} = req.body;
 
-  if (!first_name || !email || !language) {
-    return res.status(400).json({error: "Missing required data."});
-  }
+    if (!first_name || !email || !language) {
+      return res.status(400).json({error: "Missing required data."});
+    }
 
-  try {
-    createPersonalizedVideoHelper(first_name, email, language).then(({audienceId}) => {
+    try {
+      const {audienceId} = await createPersonalizedVideoHelper(first_name, email, language);
       const videoToken = admin.firestore().collection("videos").doc().id;
 
-      admin.firestore().collection("videos").doc(videoToken).set({
+      await admin.firestore().collection("videos").doc(videoToken).set({
         audience_id: audienceId,
-        email: email,
-        first_name: first_name,
-        language: language,
+        email,
+        first_name,
+        language,
         videoUrl: null,
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // Start polling for video status (server-side polling)
       pollForVideoStatus(videoToken, audienceId);
 
-      // Generate the personalized video page URL and return it immediately to the client
       const videoPageUrl = `https://nkai-ea87e.web.app/video/${videoToken}`;
 
       return res.status(200).json({
         status: "pending",
         video_page_url: videoPageUrl,
-        audienceId: audienceId,
+        audienceId,
       });
-    }).catch((error) => {
+    } catch (error) {
       console.error("Error creating personalized video:", error);
-      return res.status(500).json({error: "Error creating personalized video."});
-    });
-  } catch (error) {
-    console.error("Error creating personalized video:", error);
-    return res.status(500).json({error: "Error creating personalized video."});
-  }
+      return res.status(500).json({error: "Internal Server Error"});
+    }
+  });
 });
 
 exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
-  const videoToken = req.path.split("/").pop();
+  cors(req, res, async () => {
+    const videoToken = req.path.split("/").pop();
 
-  if (!videoToken) {
-    return res.status(400).send("Invalid video URL.");
-  }
-
-  try {
-    const docRef = admin.firestore().collection("videos").doc(videoToken);
-    const doc = await docRef.get();
-
-    if (!doc.exists) {
-      return res.status(404).send("Video not found.");
+    if (!videoToken) {
+      return res.status(400).send("Invalid video URL.");
     }
 
-    const language = doc.data().language || "english";
+    try {
+      const docRef = admin.firestore().collection("videos").doc(videoToken);
+      const doc = await docRef.get();
 
-    const htmlContent = `
+      if (!doc.exists) {
+        return res.status(404).send("Video not found.");
+      }
+
+      const language = doc.data().language || "english";
+
+      const htmlContent = `
       <html>
       <head>
         <style>
@@ -303,47 +297,39 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
       </html>
     `;
 
-    res.status(200).send(htmlContent);
-  } catch (error) {
-    console.error("Error serving personalized video:", error);
-    res.status(500).send("Internal Server Error.");
-  }
+      res.status(200).send(htmlContent);
+    } catch (error) {
+      console.error("Error serving personalized video:", error);
+      res.status(500).send("Internal Server Error.");
+    }
+  });
 });
-exports.receiveSignupWebhook = functions.https.onRequest(async (req, res) => {
-  // Handle CORS if necessary
-  res.set("Access-Control-Allow-Origin", "*");
-  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    res.status(204).send("");
-    return;
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).send("Method Not Allowed");
-  }
-
-  const {child_name, language, email} = req.body;
-
-  console.log("Received data from webhook:", {child_name, language, email});
-
-  if (!child_name || !language || !email) {
-    return res.status(400).send("Missing required fields.");
-  }
-
-  try {
-    const result = await createPersonalizedVideoHelper(child_name, email, language);
-    const {audienceId} = result;
-
-    if (!audienceId) {
-      throw new Error("Failed to create video.");
+exports.receiveSignupWebhook = functions.https.onRequest((req, res) => {
+  cors(req, res, async () => {
+    if (req.method === "OPTIONS") {
+      res.status(204).send("");
+      return;
     }
 
-    // Optionally send a response back to the third-party system with the video URL or status
-    res.status(200).send({message: "Video creation initiated.", audienceId});
-  } catch (error) {
-    console.error("Error processing webhook:", error);
-    res.status(500).send("Internal Server Error.");
-  }
+    if (req.method !== "POST") {
+      return res.status(405).send("Method Not Allowed");
+    }
+
+    const {child_name, language, email} = req.body;
+
+    if (!child_name || !language || !email) {
+      return res.status(400).send("Missing required fields.");
+    }
+
+    try {
+      const result = await createPersonalizedVideoHelper(child_name, email, language);
+      const {audienceId} = result;
+
+      res.status(200).send({message: "Video creation initiated.", audienceId});
+    } catch (error) {
+      console.error("Error processing webhook:", error);
+      res.status(500).send("Internal Server Error.");
+    }
+  });
 });
