@@ -1,8 +1,9 @@
 rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /{allPaths=**} {
-      allow read, write;
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /videos/{videoId} {
+      // Allow read access to all documents in the 'videos' collection
+      allow read: if true;
     }
   }
 }

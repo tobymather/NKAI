@@ -140,13 +140,13 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
   }
 
   try {
-    const doc = await admin.firestore().collection("videos").doc(videoToken).get();
+    const docRef = admin.firestore().collection("videos").doc(videoToken);
+    const doc = await docRef.get();
 
     if (!doc.exists) {
       return res.status(404).send("Video not found.");
     }
 
-    const videoUrl = doc.data().videoUrl;
     const language = doc.data().language || "english";
 
     const htmlContent = `
@@ -208,12 +208,12 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
             width: 50px;
             height: 50px;
             animation: spin 2s linear infinite;
-            display: ${videoUrl ? "none" : "inline-block"};
+            display: inline-block;
           }
           .loading-text {
             font-size: 16px;
             color: #777;
-            display: ${videoUrl ? "none" : "block"};
+            display: block;
           }
           @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -239,17 +239,18 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
 
         <!-- Content -->
         <div class="container">          
+
           <!-- Video Player -->
           <div class="video-player">
-            <video id="videoPlayer" controls style="width: 100%;">
-              <source id="videoSource" src="${videoUrl || ""}" type="video/mp4">
+            <video id="videoPlayer" controls style="width: 100%;" style="display:none;">
+              <source id="videoSource" src="" type="video/mp4">
               Your browser does not support the video tag.
             </video>
           </div>
 
           <!-- Loading spinner and text while video is processing -->
-          <div class="loading-spinner"></div>
-          <p class="loading-text">Your video is being processed. Please check back shortly...</p>
+          <div class="loading-spinner" id="loadingSpinner"></div>
+          <p class="loading-text" id="loadingText">Your video is being processed. Please check back shortly...</p>
 
           <div class="footer">
             <p>&copy; 2024 Novakid. All rights reserved.</p>
@@ -260,32 +261,36 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
       <script>
         const videoPlayer = document.getElementById('videoPlayer');
         const videoSource = document.getElementById('videoSource');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const loadingText = document.getElementById('loadingText');
         const videoToken = '${videoToken}';
         const language = '${language}';
+        
         const genericVideos = {
           english: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
           russian: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
           turkish: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
         };
 
-        if (!videoSource.src || videoSource.src === "") {
-          const interval = setInterval(async () => {
-            try {
-              const response = await fetch(\`/checkVideoStatus?videoToken=\${videoToken}\`);
-              const result = await response.json();
+        // Poll Firestore for video URL every 3 seconds
+        const interval = setInterval(async () => {
+          try {
+            const response = await fetch(\`https://firestore.googleapis.com/v1/projects/nkai-ea87e/databases/(default)/documents/videos/\${videoToken}\`);
+            const data = await response.json();
+            const videoUrl = data.fields.videoUrl?.stringValue;
 
-              if (result.status === 'ready' && result.video_url) {
-                videoSource.src = result.video_url;
-                videoPlayer.load();
-                document.querySelector('.loading-spinner').style.display = 'none';
-                document.querySelector('.loading-text').style.display = 'none';
-                clearInterval(interval);
-              }
-            } catch (error) {
-              console.error('Error checking video status:', error);
+            if (videoUrl) {
+              videoSource.src = videoUrl;
+              videoPlayer.style.display = "block";  // Show video player
+              videoPlayer.load();  // Load the video player
+              loadingSpinner.style.display = "none";  // Hide loading spinner
+              loadingText.style.display = "none";  // Hide loading text
+              clearInterval(interval);  // Stop polling once the video URL is found
             }
-          }, 5000);
-        }
+          } catch (error) {
+            console.error('Error checking Firestore for video URL:', error);
+          }
+        }, 3000);
 
         // Play the generic video when the personalized video ends
         videoPlayer.addEventListener('ended', function() {
