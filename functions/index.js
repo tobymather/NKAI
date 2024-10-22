@@ -91,16 +91,20 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
       return res.status(405).json({error: "Method Not Allowed"});
     }
 
-    const {first_name, email, language} = req.body;
+    const {first_name, email, language, id} = req.body;
 
-    if (!first_name || !email || !language) {
+    if (!first_name || !email || !language || !id) {
       return res.status(400).json({error: "Missing required data."});
     }
 
     try {
+      // Step 1: Create the personalized video
       const {audienceId} = await createPersonalizedVideoHelper(first_name, email, language);
       const videoToken = admin.firestore().collection("videos").doc().id;
 
+      const videoPageUrl = `https://nkai-ea87e.web.app/video/${videoToken}`;
+
+      // Step 2: Store the video details in Firestore
       await admin.firestore().collection("videos").doc(videoToken).set({
         audience_id: audienceId,
         email,
@@ -110,19 +114,21 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
 
+      // Step 3: Poll for video status
       pollForVideoStatus(videoToken, audienceId);
 
-      const videoPageUrl = `https://nkai-ea87e.web.app/video/${videoToken}`;
+      // Step 4: Update the customer in Bloomreach, sending only the video URL
+      await updateBloomreachCustomer(id, videoPageUrl);
 
+      // Step 5: Respond to the request
       return res.status(200).json({
         status: "pending",
         video_page_url: videoPageUrl,
         audienceId,
       });
     } catch (error) {
-      // More detailed logging of the error
-      console.error("Error creating personalized video:");
-      console.error("Request body:", {first_name, email, language});
+      console.error("Error creating personalized video and updating Bloomreach:");
+      console.error("Request body:", {first_name, email, language, id});
       console.error("Error message:", error.message);
       console.error("Error stack:", error.stack);
 
@@ -139,6 +145,39 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
     }
   });
 });
+
+async function updateBloomreachCustomer(parentId, videoPageUrl) {
+  const bloomreachApiUrl = `${process.env.BLOOMREACH_API_BASE_URL}/track/v2/projects/${process.env.BLOOMREACH_PROJECT_TOKEN}/customers`;
+
+  const requestBody = {
+    customer_ids: {
+      registered: `parent_${parentId}`,
+    },
+    properties: {
+      personalized_video_url: videoPageUrl,
+    },
+  };
+
+  try {
+    const response = await axios.post(bloomreachApiUrl, requestBody, {
+      headers: {
+        "accept": "application/json",
+        "authorization": `Token ${process.env.BLOOMREACH_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      auth: {
+        username: process.env.BLOOMREACH_API_USERNAME,
+        password: process.env.BLOOMREACH_API_PASSWORD,
+      },
+    });
+
+    console.log(`Bloomreach customer update success for parent_${parentId}`);
+    return response.data;
+  } catch (error) {
+    console.error("Error updating Bloomreach customer:", error.response ? error.response.data : error.message);
+    throw new Error("Failed to update Bloomreach customer.");
+  }
+}
 
 exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
   cors(req, res, async () => {
