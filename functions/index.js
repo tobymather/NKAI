@@ -119,8 +119,22 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
         audienceId,
       });
     } catch (error) {
-      console.error("Error creating personalized video:", error);
-      return res.status(500).json({error: "Internal Server Error"});
+      // More detailed logging of the error
+      console.error("Error creating personalized video:");
+      console.error("Request body:", {first_name, email, language});
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+
+      if (error.response) {
+        console.error("API response data:", error.response.data);
+        console.error("API response status:", error.response.status);
+        console.error("API response headers:", error.response.headers);
+      }
+
+      return res.status(500).json({
+        error: "Internal Server Error",
+        details: error.message,
+      });
     }
   });
 });
