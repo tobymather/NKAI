@@ -5,12 +5,13 @@ const functions = require("firebase-functions");
 const axios = require("axios");
 const admin = require("firebase-admin");
 const cors = require("cors")({origin: true}); // Add CORS middleware
+require("dotenv").config();
 
 // Initialize Firebase Admin
 admin.initializeApp();
 
 // Securely access your API key
-const api_key = "YzYxZWQwZDI2MmEzNDEyYTgxOWQxN2RmMzhkMjhhNzgtMTcyNzk1MzgzOQ==";
+const api_key = process.env.HEYGEN_API_KEY;
 
 // Helper function to create a personalized video
 async function createPersonalizedVideoHelper(first_name, email, language) {
