@@ -4,7 +4,7 @@
 const functions = require("firebase-functions");
 const axios = require("axios");
 const admin = require("firebase-admin");
-const cors = require("cors")({origin: true}); // Add CORS middleware
+const cors = require("cors")({origin: true});
 require("dotenv").config();
 
 // Initialize Firebase Admin
@@ -18,9 +18,10 @@ async function createPersonalizedVideoHelper(first_name, email, language) {
   console.log("Creating personalized video for:", {first_name, email, language});
 
   const projectIds = {
-    english: "d083109364e646a3b44730974cb077e1",
-    russian: "945b3d7ed486403c9b1558210ad7964f",
-    turkish: "a3f71b47014e440ab863635cc52dd811",
+    ja: "239eca26120d48d6944abaefaa014464",
+    he: "cefb14dcf0c04e0cb6749c63d75965aa",
+    pl: "9772e74e6dd347ed8ec5a683485a15b0",
+    ar: "63151497494746abb74c7dae4db4646b",
   };
 
   const project_id = projectIds[language.toLowerCase()];
@@ -91,9 +92,9 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
       return res.status(405).json({error: "Method Not Allowed"});
     }
 
-    const {first_name, email, language, id} = req.body;
+    const {first_name, email, language} = req.body;
 
-    if (!first_name || !email || !language || !id) {
+    if (!first_name || !email || !language) {
       return res.status(400).json({error: "Missing required data."});
     }
 
@@ -125,7 +126,7 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
       });
     } catch (error) {
       console.error("Error creating personalized video:");
-      console.error("Request body:", {first_name, email, language, id});
+      console.error("Request body:", {first_name, email, language});
       console.error("Error message:", error.message);
       console.error("Error stack:", error.stack);
 
@@ -143,6 +144,7 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
   });
 });
 
+// Serve the personalized video along with the generic video
 exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
   cors(req, res, async () => {
     const videoToken = req.path.split("/").pop();
@@ -159,7 +161,14 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
         return res.status(404).send("Video not found.");
       }
 
-      const language = doc.data().language || "english";
+      const language = doc.data().language || "ar";
+
+      const genericVideos = {
+        ar: "https://firebasestorage.googleapis.com/v0/b/nkai-ea87e.appspot.com/o/generic%2FAR%20Adrienne%20Generic.mp4?alt=media&token=318873ca-2a4d-497a-8438-cf6d766df5fe",
+        pl: "https://firebasestorage.googleapis.com/v0/b/nkai-ea87e.appspot.com/o/generic%2FPO%20Adrienne%20Generic.mp4?alt=media&token=69b16a7c-77f1-4299-909c-b8de11a8034a",
+        ja: "https://firebasestorage.googleapis.com/v0/b/nkai-ea87e.appspot.com/o/generic%2FJA%20Adrienne%20Generic.mp4?alt=media&token=73d40a73-6b0d-46ae-90f9-eaaf177f58e8",
+        he: "https://firebasestorage.googleapis.com/v0/b/nkai-ea87e.appspot.com/o/generic%2FHE%20Adrienne%20Generic.mp4?alt=media&token=3610ff90-f3b9-4343-9d0a-33bab951505d",
+      };
 
       const htmlContent = `
       <html>
@@ -203,7 +212,6 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
             width: 90%;
             max-width:800px;
-            margin-top:80px;
           }
           h1 {
             font-size: 24px;
@@ -240,7 +248,6 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
         </style>
       </head>
       <body>
-        <!-- Header -->
         <div class="header">
           <img src="https://cdn.novakidschool.com/landing/static/images/logo_dark-blue.svg" alt="Novakid Logo" class="header__logo"/>
           <a href="https://school.novakidschool.com/signin">
@@ -250,10 +257,7 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
           </a>
         </div>
 
-        <!-- Content -->
-        <div class="container">          
-
-          <!-- Video Player -->
+        <div class="container">
           <div class="video-player">
             <video id="videoPlayer" controls style="width: 100%;" style="display:none;">
               <source id="videoSource" src="" type="video/mp4">
@@ -261,7 +265,6 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
             </video>
           </div>
 
-          <!-- Loading spinner and text while video is processing -->
           <div class="loading-spinner" id="loadingSpinner"></div>
           <p class="loading-text" id="loadingText">Your video is being processed. Please check back shortly...</p>
 
@@ -278,12 +281,8 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
         const loadingText = document.getElementById('loadingText');
         const videoToken = '${videoToken}';
         const language = '${language}';
-        
-        const genericVideos = {
-          english: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-          russian: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-          turkish: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
-        };
+
+        const genericVideos = ${JSON.stringify(genericVideos)};
 
         // Poll Firestore for video URL every 3 seconds
         const interval = setInterval(async () => {
@@ -307,7 +306,7 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
 
         // Play the generic video when the personalized video ends
         videoPlayer.addEventListener('ended', function() {
-          const genericVideoUrl = genericVideos[language.toLowerCase()] || genericVideos['english'];
+          const genericVideoUrl = genericVideos[language.toLowerCase()] || genericVideos['ar'];
           videoSource.src = genericVideoUrl;
           videoPlayer.load();
           videoPlayer.play();
@@ -319,35 +318,6 @@ exports.servePersonalizedVideo = functions.https.onRequest(async (req, res) => {
       res.status(200).send(htmlContent);
     } catch (error) {
       console.error("Error serving personalized video:", error);
-      res.status(500).send("Internal Server Error.");
-    }
-  });
-});
-
-exports.receiveSignupWebhook = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    if (req.method === "OPTIONS") {
-      res.status(204).send("");
-      return;
-    }
-
-    if (req.method !== "POST") {
-      return res.status(405).send("Method Not Allowed");
-    }
-
-    const {child_name, language, email} = req.body;
-
-    if (!child_name || !language || !email) {
-      return res.status(400).send("Missing required fields.");
-    }
-
-    try {
-      const result = await createPersonalizedVideoHelper(child_name, email, language);
-      const {audienceId} = result;
-
-      res.status(200).send({message: "Video creation initiated.", audienceId});
-    } catch (error) {
-      console.error("Error processing webhook:", error);
       res.status(500).send("Internal Server Error.");
     }
   });
