@@ -13,7 +13,6 @@ admin.initializeApp();
 // Securely access your API key
 const api_key = process.env.HEYGEN_API_KEY;
 
-// Helper function to create a personalized video
 async function createPersonalizedVideoHelper(first_name, email, language) {
   console.log("Creating personalized video for:", {first_name, email, language});
 
@@ -26,13 +25,12 @@ async function createPersonalizedVideoHelper(first_name, email, language) {
 
   const project_id = projectIds[language.toLowerCase()];
   if (!project_id) {
-    console.error("Unsupported language provided:", language);
     throw new Error("Unsupported language provided.");
   }
 
   const variables_list = [{first_name, email}];
-
   try {
+    // Step 1: Create the audience ID
     const response = await axios.post(
         "https://api.heygen.com/v1/personalized_video/add_contact",
         {project_id, variables_list},
@@ -42,7 +40,17 @@ async function createPersonalizedVideoHelper(first_name, email, language) {
     const audienceId = response.data.data.id;
     console.log("Generated audience ID:", audienceId);
 
-    return {audienceId, email, language};
+    // Step 2: Make a follow-up request to get video and gif URLs if available
+    const detailResponse = await axios.get(
+        `https://api.heygen.com/v1/personalized_video/audience/detail?id=${audienceId}`,
+        {headers: {"x-api-key": api_key, "accept": "application/json"}},
+    );
+
+    const {video_url = "", gif_url = ""} = detailResponse.data.data;
+    console.log("Initial video URL:", video_url);
+    console.log("Initial gif URL:", gif_url);
+
+    return {audienceId, video_url, gif_url};
   } catch (error) {
     console.error("Error during Heygen API call:", error.response ? error.response.data : error.message);
     throw new Error("Error creating video.");
@@ -63,19 +71,16 @@ async function pollForVideoStatus(videoToken, audienceId) {
 
       const videoStatus = videoResponse.data.data.status;
       const heygenVideoUrl = videoResponse.data.data.video_url;
-
-      console.log(`Heygen API returned status: ${videoStatus} for audience ID: ${audienceId}`);
+      const gifUrl = videoResponse.data.data.gif_url;
 
       if (videoStatus === "ready") {
-        console.log(`Heygen video is ready. Using video URL: ${heygenVideoUrl}`);
         polling = false;
 
         const docRef = admin.firestore().collection("videos").doc(videoToken);
-        await docRef.update({videoUrl: heygenVideoUrl});
+        await docRef.update({videoUrl: heygenVideoUrl || "", gifUrl: gifUrl || ""});
 
-        console.log(`Firestore document updated with Heygen video URL for token ${videoToken}`);
+        console.log(`Firestore document updated with Heygen video URL and gif URL for token ${videoToken}`);
       } else {
-        console.log(`Video is still processing. Status: ${videoStatus}`);
         await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds before next poll
       }
     } catch (error) {
@@ -93,53 +98,43 @@ exports.createPersonalizedVideo = functions.https.onRequest((req, res) => {
     }
 
     const {first_name, email, language} = req.body;
-
     if (!first_name || !email || !language) {
       return res.status(400).json({error: "Missing required data."});
     }
 
     try {
-      // Step 1: Create the personalized video
-      const {audienceId} = await createPersonalizedVideoHelper(first_name, email, language);
+      // Create the personalized video and retrieve initial URLs
+      const {audienceId, video_url, gif_url} = await createPersonalizedVideoHelper(first_name, email, language);
       const videoToken = admin.firestore().collection("videos").doc().id;
 
       const videoPageUrl = `https://nkai-ea87e.web.app/video/${videoToken}`;
 
-      // Step 2: Store the video details in Firestore
+      // Store initial video and gif URLs in Firestore
       await admin.firestore().collection("videos").doc(videoToken).set({
         audience_id: audienceId,
         email,
         first_name,
         language,
-        videoUrl: null,
+        videoUrl: video_url || "",
+        gifUrl: gif_url || "",
         created_at: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // Step 3: Poll for video status
+      // Poll for video status to update URLs once fully processed
       pollForVideoStatus(videoToken, audienceId);
 
-      // Step 4: Respond to the request
+      // Respond to the request with initial video and gif URLs
       return res.status(200).json({
         status: "pending",
         video_page_url: videoPageUrl,
         audienceId,
+        video_url,
+        gif_url,
+        videoToken,
       });
     } catch (error) {
-      console.error("Error creating personalized video:");
-      console.error("Request body:", {first_name, email, language});
-      console.error("Error message:", error.message);
-      console.error("Error stack:", error.stack);
-
-      if (error.response) {
-        console.error("API response data:", error.response.data);
-        console.error("API response status:", error.response.status);
-        console.error("API response headers:", error.response.headers);
-      }
-
-      return res.status(500).json({
-        error: "Internal Server Error",
-        details: error.message,
-      });
+      console.error("Error creating personalized video:", error.message);
+      return res.status(500).json({error: "Internal Server Error", details: error.message});
     }
   });
 });

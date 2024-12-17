@@ -1,5 +1,12 @@
 {
   "projects": {
     "default": "nkai-ea87e"
-  }
+  },
+  "targets": {},
+  "etags": {
+    "nkai-ea87e": {
+      "extensionInstances": {}
+    }
+  },
+  "dataconnectEmulatorConfig": {}
 }
