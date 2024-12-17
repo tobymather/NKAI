@@ -1,6 +1,6 @@
 // Initialize Firebase
 const firebaseConfig = {
-apiKey: "REMOVED",
+apiKey: "process.env.FIREBASE_API_KEY",
 authDomain: "nkai-ea87e.firebaseapp.com",
 projectId: "nkai-ea87e",
 storageBucket: "nkai-ea87e.appspot.com",
